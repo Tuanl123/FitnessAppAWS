@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Docker
+docker-compose.override.yml
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.cache/
+*.log
+
+# Terraform
+infrastructure/.terraform/
+infrastructure/*.tfstate
+infrastructure/*.tfstate.backup
+infrastructure/*.tfplan
+infrastructure/.terraform.lock.hcl
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic
+*.db
+
+# LocalStack
+.localstack/
+
+# Lambda build artifacts
+services/analytics-lambda/package/
+services/analytics-lambda/lambda.zip
+
+# Terraform plan (no extension)
+infrastructure/tfplan

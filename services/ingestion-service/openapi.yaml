@@ -1,0 +1,165 @@
+openapi: "3.1.0"
+info:
+  title: Fitness Tracker — Metrics Service
+  version: "0.1.0"
+  description: Metric ingestion (SQS) and analytics retrieval (analytics_db reads).
+
+servers:
+  - url: http://localhost/api/metrics
+    description: Local (Nginx proxy)
+
+paths:
+  /ingest:
+    post:
+      summary: Submit a single metric
+      operationId: ingestMetric
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MetricIngest" }
+      responses:
+        "202":
+          description: Accepted for processing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  message_id: { type: string }
+        "401": { description: Unauthorized }
+        "422": { description: Validation error }
+        "429": { description: Rate limited }
+
+  /ingest/batch:
+    post:
+      summary: Submit up to 50 metrics
+      operationId: ingestBatch
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [metrics]
+              properties:
+                metrics:
+                  type: array
+                  items: { $ref: "#/components/schemas/MetricIngest" }
+                  minItems: 1
+                  maxItems: 50
+      responses:
+        "202":
+          description: Batch accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  accepted_count: { type: integer }
+                  message_ids: { type: array, items: { type: string } }
+        "401": { description: Unauthorized }
+        "422": { description: Validation error }
+        "429": { description: Rate limited }
+
+  /history:
+    get:
+      summary: Retrieve raw metric history
+      operationId: getHistory
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: metric_type, in: query, schema: { $ref: "#/components/schemas/MetricTypeEnum" } }
+        - { name: start_date, in: query, schema: { type: string, format: date } }
+        - { name: end_date, in: query, schema: { type: string, format: date } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Metric history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  metrics:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        metric_type: { type: string }
+                        value: { type: number }
+                        recorded_at: { type: string, format: date-time }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        "401": { description: Unauthorized }
+
+  /summary:
+    get:
+      summary: Retrieve aggregated analytics and insights
+      operationId: getSummary
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - { name: period, in: query, required: true, schema: { type: string, enum: [daily, weekly] } }
+        - { name: metric_type, in: query, schema: { $ref: "#/components/schemas/MetricTypeEnum" } }
+        - { name: start_date, in: query, schema: { type: string, format: date } }
+        - { name: end_date, in: query, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Summary data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aggregations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        metric_type: { type: string }
+                        period: { type: string }
+                        date: { type: string }
+                        avg_value: { type: number }
+                        min_value: { type: number }
+                        max_value: { type: number }
+                  insights:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string, enum: [anomaly, trend, milestone] }
+                        description: { type: string }
+                        generated_at: { type: string, format: date-time }
+        "401": { description: Unauthorized }
+
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service healthy
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    MetricTypeEnum:
+      type: string
+      enum: [heart_rate, steps, workout_duration, calories_burned, sleep_hours, distance_km]
+    MetricIngest:
+      type: object
+      required: [metric_type, value, recorded_at]
+      properties:
+        metric_type: { $ref: "#/components/schemas/MetricTypeEnum" }
+        value: { type: number, minimum: 0 }
+        recorded_at: { type: string, format: date-time }

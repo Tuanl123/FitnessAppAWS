@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-jose[cryptography]
+boto3
+slowapi
+psycopg2-binary
+python-json-logger
+prometheus-fastapi-instrumentator
+httpx
+pytest

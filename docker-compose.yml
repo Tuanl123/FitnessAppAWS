@@ -1,0 +1,100 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs
+      DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./scripts/init-sqs.sh:/etc/localstack/init/ready.d/init-sqs.sh
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name analytics-queue 2>/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - user-service
+      - ingestion-service
+
+  user-service:
+    build:
+      context: ./services
+      dockerfile: user-service/Dockerfile
+    environment:
+      USER_DB_URL: postgresql+asyncpg://postgres:devpass@postgres:5432/user_db
+      JWT_SECRET: dev-secret-key-change-in-production
+      ENVIRONMENT: local
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ingestion-service:
+    build:
+      context: ./services
+      dockerfile: ingestion-service/Dockerfile
+    environment:
+      JWT_SECRET: dev-secret-key-change-in-production
+      SQS_ENDPOINT_URL: http://localstack:4566
+      SQS_QUEUE_NAME: analytics-queue
+      ANALYTICS_DB_URL: postgresql://postgres:devpass@postgres:5432/analytics_db
+      ENVIRONMENT: local
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  analytics-worker:
+    build:
+      context: ./services
+      dockerfile: analytics-lambda/Dockerfile
+    command: python local_worker.py
+    environment:
+      SQS_ENDPOINT_URL: http://localstack:4566
+      SQS_QUEUE_NAME: analytics-queue
+      ANALYTICS_DB_URL: postgresql://postgres:devpass@postgres:5432/analytics_db
+      SNS_TOPIC_ARN: ""
+      ENVIRONMENT: local
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+volumes:
+  pgdata:

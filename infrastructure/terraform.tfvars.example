@@ -1,0 +1,33 @@
+aws_region   = "us-east-1"
+project_name = "fitness-tracker"
+environment  = "prod"
+
+# ─── Database credentials ───────────────────────────────────
+user_db_username      = "fitness_user"
+user_db_password      = "CHANGE_ME_user_db_password"
+analytics_db_username = "fitness_analytics"
+analytics_db_password = "CHANGE_ME_analytics_db_password"
+
+# ─── Auth ────────────────────────────────────────────────────
+jwt_secret = "CHANGE_ME_jwt_secret_min_32_chars"
+
+# ─── Notifications ───────────────────────────────────────────
+notification_email = "your-email@example.com"
+
+# ─── CI/CD ────────────────────────────────────────────────────
+github_repo = "YourGitHubUser/fitnessApp"
+
+# ─── Container image tags (updated by CI/CD) ────────────────
+user_service_image_tag      = "latest"
+ingestion_service_image_tag = "latest"
+
+# ─── ECS sizing (optional — defaults are fine for start) ────
+# ecs_cpu           = 256
+# ecs_memory        = 512
+# ecs_desired_count = 2
+
+# ─── Auto Scaling (optional) ────────────────────────────────
+# ecs_min_count              = 1
+# ecs_max_count              = 4
+# autoscaling_cpu_target     = 70
+# autoscaling_request_target = 1000

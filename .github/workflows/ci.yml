@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-user-service:
+    name: Test User Service
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_user_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: services/user-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/user-service/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e ../shared/ 2>/dev/null || true
+
+      - name: Run tests
+        env:
+          USER_DB_URL: postgresql+asyncpg://test:test@localhost:5432/test_user_db
+          JWT_SECRET: ci-test-secret-key-do-not-use
+          ENVIRONMENT: local
+          PYTHONPATH: ${{ github.workspace }}/services
+        run: pytest -v
+
+  test-ingestion-service:
+    name: Test Ingestion Service
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: services/ingestion-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/ingestion-service/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          JWT_SECRET: ci-test-secret-key-do-not-use
+          SQS_QUEUE_NAME: test-queue
+          SQS_ENDPOINT_URL: http://localhost:4566
+          ANALYTICS_DB_URL: postgresql://test:test@localhost:5432/test_db
+          ENVIRONMENT: local
+          PYTHONPATH: ${{ github.workspace }}/services
+        run: pytest -v
+
+  lint-and-build-frontend:
+    name: Lint & Build Frontend
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  build-docker-images:
+    name: Build ${{ matrix.service }} Image
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - service: user-service
+            dockerfile: services/user-service/Dockerfile
+          - service: ingestion-service
+            dockerfile: services/ingestion-service/Dockerfile
+          - service: analytics-lambda
+            dockerfile: services/analytics-lambda/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f ${{ matrix.dockerfile }} \
+            -t ${{ matrix.service }}:ci-${{ github.sha }} \
+            services/

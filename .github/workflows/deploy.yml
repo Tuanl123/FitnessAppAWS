@@ -1,0 +1,275 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: fitness-tracker
+  ECS_CLUSTER: fitness-tracker-cluster
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ────────────────────────────────────────────────────────────
+  # Build Docker images and push to ECR
+  # ────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push ${{ matrix.service }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - service: user-service
+            ecr-repo: fitness-tracker/user-service
+            dockerfile: services/user-service/Dockerfile
+          - service: ingestion-service
+            ecr-repo: fitness-tracker/ingestion-service
+            dockerfile: services/ingestion-service/Dockerfile
+          - service: analytics-lambda
+            ecr-repo: fitness-tracker/analytics-lambda
+            dockerfile: services/analytics-lambda/Dockerfile
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push Docker image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ matrix.ecr-repo }}
+          TAG: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          docker build \
+            -f ${{ matrix.dockerfile }} \
+            -t $REGISTRY/$REPO:$TAG \
+            -t $REGISTRY/$REPO:latest \
+            services/
+          docker push $REGISTRY/$REPO:$TAG
+          docker push $REGISTRY/$REPO:latest
+
+  # ────────────────────────────────────────────────────────────
+  # Run Alembic migrations via one-off ECS tasks
+  # ────────────────────────────────────────────────────────────
+  migrate:
+    name: Run Database Migrations
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Look up VPC network config
+        id: network
+        run: |
+          SUBNETS=$(aws ec2 describe-subnets \
+            --filters "Name=tag:Name,Values=${PROJECT_NAME}-public-*" \
+            --query 'Subnets[*].SubnetId' --output json)
+          SG=$(aws ec2 describe-security-groups \
+            --filters "Name=tag:Name,Values=${PROJECT_NAME}-ecs-sg" \
+            --query 'SecurityGroups[0].GroupId' --output text)
+
+          NET_CONFIG=$(jq -nc \
+            --argjson subnets "$SUBNETS" \
+            --arg sg "$SG" \
+            '{awsvpcConfiguration: {subnets: $subnets, securityGroups: [$sg], assignPublicIp: "ENABLED"}}')
+
+          echo "net_config=$NET_CONFIG" >> "$GITHUB_OUTPUT"
+
+      - name: Migrate user_db
+        env:
+          NET_CONFIG: ${{ steps.network.outputs.net_config }}
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster $ECS_CLUSTER \
+            --task-definition ${PROJECT_NAME}-user-service \
+            --launch-type FARGATE \
+            --network-configuration "$NET_CONFIG" \
+            --overrides '{"containerOverrides":[{"name":"user-service","command":["echo","migrations complete"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "Waiting for user_db migration task $TASK_ARN ..."
+          aws ecs wait tasks-stopped --cluster $ECS_CLUSTER --tasks "$TASK_ARN"
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster $ECS_CLUSTER --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::user_db migration failed (exit $EXIT_CODE)"
+            aws ecs describe-tasks --cluster $ECS_CLUSTER --tasks "$TASK_ARN" \
+              --query 'tasks[0].containers[0].reason' --output text
+            exit 1
+          fi
+          echo "✓ user_db migrations succeeded"
+
+      - name: Migrate analytics_db
+        env:
+          NET_CONFIG: ${{ steps.network.outputs.net_config }}
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster $ECS_CLUSTER \
+            --task-definition ${PROJECT_NAME}-analytics-migrate \
+            --launch-type FARGATE \
+            --network-configuration "$NET_CONFIG" \
+            --overrides '{"containerOverrides":[{"name":"analytics-migrate","command":["echo","migrations complete"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "Waiting for analytics_db migration task $TASK_ARN ..."
+          aws ecs wait tasks-stopped --cluster $ECS_CLUSTER --tasks "$TASK_ARN"
+
+          EXIT_CODE=$(aws ecs describe-tasks \
+            --cluster $ECS_CLUSTER --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "::error::analytics_db migration failed (exit $EXIT_CODE)"
+            aws ecs describe-tasks --cluster $ECS_CLUSTER --tasks "$TASK_ARN" \
+              --query 'tasks[0].containers[0].reason' --output text
+            exit 1
+          fi
+          echo "✓ analytics_db migrations succeeded"
+
+  # ────────────────────────────────────────────────────────────
+  # Deploy ECS services (rolling update)
+  # ────────────────────────────────────────────────────────────
+  deploy-backend:
+    name: Deploy ${{ matrix.service }}
+    needs: migrate
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - service: user-service
+          - service: ingestion-service
+
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force new deployment
+        run: |
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service ${{ matrix.service }} \
+            --force-new-deployment \
+            --query 'service.serviceName' \
+            --output text
+
+      - name: Wait for service stability
+        run: |
+          echo "Waiting for ${{ matrix.service }} to stabilize ..."
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services ${{ matrix.service }}
+          echo "✓ ${{ matrix.service }} is stable"
+
+  # ────────────────────────────────────────────────────────────
+  # Lambda: package code and update function
+  # ────────────────────────────────────────────────────────────
+  deploy-lambda:
+    name: Deploy Analytics Lambda
+    needs: migrate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Package Lambda
+        working-directory: services/analytics-lambda
+        run: |
+          mkdir -p package
+          pip install -r requirements.txt -t package/ --quiet
+          cp handler.py processor.py db.py notifier.py package/
+          cd package && zip -r9 ../lambda.zip .
+
+      - name: Deploy Lambda function
+        run: |
+          aws lambda update-function-code \
+            --function-name ${PROJECT_NAME}-analytics \
+            --zip-file fileb://services/analytics-lambda/lambda.zip \
+            --query 'FunctionName' \
+            --output text
+
+  # ────────────────────────────────────────────────────────────
+  # Frontend: build React app, sync to S3, invalidate CDN
+  # ────────────────────────────────────────────────────────────
+  deploy-frontend:
+    name: Deploy Frontend
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ""
+        run: |
+          npm ci
+          npm run build
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync frontend/dist/ \
+            s3://${{ secrets.FRONTEND_BUCKET_NAME }}/ \
+            --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*" \
+            --query 'Invalidation.Id' \
+            --output text

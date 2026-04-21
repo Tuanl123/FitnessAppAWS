@@ -49,12 +49,13 @@ resource "aws_iam_role_policy" "grafana_amp" {
         "aps:GetLabels",
         "aps:GetMetricMetadata",
       ]
-      Resource = "${aws_prometheus_workspace.main.arn}/*"
+      Resource = aws_prometheus_workspace.main.arn
     }]
   })
 }
 
 # ─── ADOT: AMP remote-write permission on ECS task role ──────
+# aps:RemoteWrite targets the workspace ARN itself (no /* suffix).
 
 resource "aws_iam_role_policy" "ecs_task_amp" {
   name = "amp-remote-write"
@@ -65,7 +66,7 @@ resource "aws_iam_role_policy" "ecs_task_amp" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["aps:RemoteWrite"]
-      Resource = "${aws_prometheus_workspace.main.arn}/*"
+      Resource = aws_prometheus_workspace.main.arn
     }]
   })
 }

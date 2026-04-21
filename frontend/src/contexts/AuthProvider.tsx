@@ -1,42 +1,21 @@
-import {
-  createContext,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import * as authApi from "../api/auth";
+import { AuthContext, type AuthState } from "./AuthContext";
 
-interface AuthState {
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  userName: string | null;
+function readInitialState(): AuthState {
+  if (typeof window === "undefined") {
+    return { isAuthenticated: false, isLoading: false, userName: null };
+  }
+  const token = localStorage.getItem("access_token");
+  return {
+    isAuthenticated: !!token,
+    isLoading: false,
+    userName: localStorage.getItem("user_name"),
+  };
 }
-
-interface AuthContextValue extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name: string) => Promise<void>;
-  logout: () => void;
-}
-
-export const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({
-    isAuthenticated: false,
-    isLoading: true,
-    userName: null,
-  });
-
-  useEffect(() => {
-    const token = localStorage.getItem("access_token");
-    setState({
-      isAuthenticated: !!token,
-      isLoading: false,
-      userName: localStorage.getItem("user_name"),
-    });
-  }, []);
+  const [state, setState] = useState<AuthState>(readInitialState);
 
   const login = useCallback(async (email: string, password: string) => {
     const tokens = await authApi.login(email, password);

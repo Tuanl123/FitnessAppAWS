@@ -1,3 +1,6 @@
+# Walkthrough Video
+https://drive.google.com/file/d/1eqUYkbyE6c20L65WYIM13letrX-AYz0z/view?usp=sharing
+
 # Fitness Metrics Tracker
 
 A full-stack fitness tracking platform built with FastAPI microservices, a React dashboard, and an event-driven analytics pipeline on AWS. Users log health metrics (steps, heart rate, sleep, etc.), which flow through SQS into a Lambda-based processing pipeline that computes aggregations and generates insights like anomaly alerts, trend detection, and milestone achievements.

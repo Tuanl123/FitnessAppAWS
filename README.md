@@ -1,5 +1,5 @@
 # Walkthrough Video
-https://drive.google.com/file/d/1eqUYkbyE6c20L65WYIM13letrX-AYz0z/view?usp=sharing
+https://buveduvn0-my.sharepoint.com/personal/tuan_nn_st_buv_edu_vn/_layouts/15/guestaccess.aspx?share=IQCPYgJ95KGgS7Ok8-pNlI-0Af7bSnH0RDaWre_YQNuDmas&nav=eyJyZWZlcnJhbEluZm8iOnsicmVmZXJyYWxBcHAiOiJPbmVEcml2ZUZvckJ1c2luZXNzIiwicmVmZXJyYWxBcHBQbGF0Zm9ybSI6IldlYiIsInJlZmVycmFsTW9kZSI6InZpZXciLCJyZWZlcnJhbFZpZXciOiJNeUZpbGVzTGlua0NvcHkifX0&e=RRCwfE
 
 # Fitness Metrics Tracker
 
